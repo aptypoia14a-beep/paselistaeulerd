@@ -37,7 +37,26 @@
         .subtitle {
             text-align: center;
             color: #666;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
+        }
+
+        .cloud-status {
+            background: #e8f5e9;
+            border: 2px solid #4caf50;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .cloud-status.disconnected {
+            background: #ffebee;
+            border-color: #f44336;
+        }
+
+        .cloud-status.syncing {
+            background: #fff3e0;
+            border-color: #ff9800;
         }
         
         .tabs {
@@ -246,18 +265,63 @@
             border-radius: 10px;
             margin: 20px 0;
         }
+
+        .config-section {
+            background: #fff9e6;
+            border: 2px solid #ffc107;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>📱 Sistema de Asistencia</h1>
-        <p class="subtitle">Control de entrada y salida con QR/Código de Barras</p>
+        <p class="subtitle">Control de entrada y salida con QR/Código de Barras - ☁️ Sincronizado con Google Sheets</p>
+        
+        <div id="cloudStatus" class="cloud-status disconnected">
+            ⚠️ No conectado a Google Sheets - Usando almacenamiento local
+        </div>
         
         <div class="tabs">
             <button class="tab active" onclick="showTab('scanner')">🔍 Escáner</button>
             <button class="tab" onclick="showTab('students')">👥 Alumnos</button>
             <button class="tab" onclick="showTab('records')">📊 Registros</button>
             <button class="tab" onclick="showTab('reports')">📈 Reportes</button>
+            <button class="tab" onclick="showTab('config')">⚙️ Configuración</button>
+        </div>
+        
+        <!-- TAB: CONFIGURACIÓN -->
+        <div id="config" class="tab-content">
+            <h2>⚙️ Configuración de Google Sheets</h2>
+            
+            <div class="config-section">
+                <h3>📝 Instrucciones:</h3>
+                <ol>
+                    <li>Abre tu Google Sheet</li>
+                    <li>Ve a <strong>Extensiones → Apps Script</strong></li>
+                    <li>Pega el código del script proporcionado</li>
+                    <li>Haz clic en <strong>Implementar → Nueva implementación</strong></li>
+                    <li>Selecciona <strong>Aplicación web</strong></li>
+                    <li>Copia la URL de la aplicación web</li>
+                    <li>Pégala aquí abajo y guarda</li>
+                </ol>
+            </div>
+            
+            <div class="form-group">
+                <label>URL del Web App de Google Apps Script:</label>
+                <input type="text" id="webAppUrl" placeholder="https://script.google.com/macros/s/...">
+            </div>
+            
+            <div class="actions">
+                <button class="btn btn-success" onclick="saveConfig()">💾 Guardar Configuración</button>
+                <button class="btn btn-primary" onclick="testConnection()">🔌 Probar Conexión</button>
+                <button class="btn btn-primary" onclick="syncToCloud()">☁️ Sincronizar Todo a la Nube</button>
+                <button class="btn btn-primary" onclick="loadFromCloud()">⬇️ Cargar Datos desde la Nube</button>
+            </div>
+            
+            <div id="configStatus"></div>
         </div>
         
         <!-- TAB: ESCÁNER -->
@@ -364,21 +428,176 @@
         // Estructura de datos
         let students = [];
         let attendanceRecords = [];
+        let webAppUrl = '';
+        let isCloudConnected = false;
 
         // Cargar datos al iniciar
         window.onload = function() {
             loadData();
+            loadConfig();
             displayStudents();
             displayRecords();
             setTodayDate();
             setupBluetoothScanner();
+            updateCloudStatus();
         };
+
+        // ========== CONFIGURACIÓN Y CONEXIÓN A LA NUBE ==========
+        
+        function loadConfig() {
+            webAppUrl = localStorage.getItem('webAppUrl') || '';
+            if (webAppUrl) {
+                document.getElementById('webAppUrl').value = webAppUrl;
+                testConnection();
+            }
+        }
+
+        function saveConfig() {
+            webAppUrl = document.getElementById('webAppUrl').value.trim();
+            if (!webAppUrl) {
+                alert('Por favor ingrese una URL válida');
+                return;
+            }
+            localStorage.setItem('webAppUrl', webAppUrl);
+            showConfigStatus('✅ Configuración guardada. Probando conexión...', 'success');
+            testConnection();
+        }
+
+        async function testConnection() {
+            if (!webAppUrl) {
+                showConfigStatus('❌ Configure la URL del Web App primero', 'error');
+                return;
+            }
+            
+            showConfigStatus('🔄 Probando conexión...', 'info');
+            
+            try {
+                const response = await fetch(webAppUrl + '?action=getStudents');
+                const data = await response.json();
+                
+                if (data.success) {
+                    isCloudConnected = true;
+                    showConfigStatus('✅ Conexión exitosa con Google Sheets', 'success');
+                    updateCloudStatus();
+                } else {
+                    isCloudConnected = false;
+                    showConfigStatus('❌ Error al conectar: ' + data.error, 'error');
+                    updateCloudStatus();
+                }
+            } catch (error) {
+                isCloudConnected = false;
+                showConfigStatus('❌ Error de conexión: ' + error.message, 'error');
+                updateCloudStatus();
+            }
+        }
+
+        function updateCloudStatus() {
+            const statusDiv = document.getElementById('cloudStatus');
+            if (isCloudConnected) {
+                statusDiv.className = 'cloud-status';
+                statusDiv.innerHTML = '✅ Conectado a Google Sheets - Los datos se sincronizan automáticamente';
+            } else {
+                statusDiv.className = 'cloud-status disconnected';
+                statusDiv.innerHTML = '⚠️ No conectado a Google Sheets - Usando almacenamiento local';
+            }
+        }
+
+        async function saveToCloud(endpoint, data) {
+            if (!isCloudConnected || !webAppUrl) return false;
+            
+            try {
+                const response = await fetch(webAppUrl, {
+                    method: 'POST',
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                return result.success;
+            } catch (error) {
+                console.error('Error guardando en la nube:', error);
+                return false;
+            }
+        }
+
+        async function syncToCloud() {
+            if (!webAppUrl) {
+                alert('Configure la URL del Web App primero');
+                showTab('config');
+                return;
+            }
+            
+            showConfigStatus('🔄 Sincronizando...', 'info');
+            
+            try {
+                // Sincronizar alumnos
+                await saveToCloud('saveStudents', {
+                    action: 'saveStudents',
+                    students: students
+                });
+                
+                // Sincronizar registros (uno por uno)
+                for (const record of attendanceRecords) {
+                    await saveToCloud('saveRecord', {
+                        action: 'saveRecord',
+                        record: record
+                    });
+                }
+                
+                showConfigStatus('✅ Sincronización completada', 'success');
+            } catch (error) {
+                showConfigStatus('❌ Error en sincronización: ' + error.message, 'error');
+            }
+        }
+
+        async function loadFromCloud() {
+            if (!webAppUrl) {
+                alert('Configure la URL del Web App primero');
+                showTab('config');
+                return;
+            }
+            
+            showConfigStatus('🔄 Cargando desde la nube...', 'info');
+            
+            try {
+                // Cargar alumnos
+                const studentsResponse = await fetch(webAppUrl + '?action=getStudents');
+                const studentsData = await studentsResponse.json();
+                
+                if (studentsData.success && studentsData.students.length > 0) {
+                    students = studentsData.students;
+                }
+                
+                // Cargar registros
+                const recordsResponse = await fetch(webAppUrl + '?action=getRecords');
+                const recordsData = await recordsResponse.json();
+                
+                if (recordsData.success && recordsData.records.length > 0) {
+                    attendanceRecords = recordsData.records;
+                }
+                
+                saveData();
+                displayStudents();
+                displayRecords();
+                
+                showConfigStatus('✅ Datos cargados desde la nube', 'success');
+            } catch (error) {
+                showConfigStatus('❌ Error cargando datos: ' + error.message, 'error');
+            }
+        }
+
+        function showConfigStatus(message, type) {
+            const statusDiv = document.getElementById('configStatus');
+            statusDiv.className = 'status-box ' + type;
+            statusDiv.innerHTML = message;
+            statusDiv.style.display = 'block';
+        }
+
+        // ========== FUNCIONES ORIGINALES MODIFICADAS ==========
 
         function setupBluetoothScanner() {
             const scannerInput = document.getElementById('bluetoothScanner');
             const manualInput = document.getElementById('manualCode');
             
-            // Procesar código cuando se presiona Enter (escáner Bluetooth envía Enter automáticamente)
             scannerInput.addEventListener('keypress', function(e) {
                 if (e.key === 'Enter') {
                     e.preventDefault();
@@ -390,7 +609,6 @@
                 }
             });
             
-            // Entrada manual
             manualInput.addEventListener('keypress', function(e) {
                 if (e.key === 'Enter') {
                     e.preventDefault();
@@ -398,7 +616,6 @@
                 }
             });
             
-            // Mantener el foco en el campo del escáner
             setInterval(() => {
                 const activeTab = document.querySelector('.tab-content.active');
                 if (activeTab && activeTab.id === 'scanner') {
@@ -435,7 +652,6 @@
             document.getElementById('filterDate').value = today;
         }
 
-        // Gestión de tabs
         function showTab(tabName) {
             document.querySelectorAll('.tab-content').forEach(tab => {
                 tab.classList.remove('active');
@@ -466,12 +682,11 @@
             document.getElementById('manualCode').value = '';
         }
 
-        function processCode(code) {
+        async function processCode(code) {
             const student = students.find(s => s.code === code);
             
             if (!student) {
                 showStatus('❌ Alumno no encontrado: ' + code, 'error');
-                // Reproducir sonido de error (opcional)
                 return;
             }
             
@@ -490,10 +705,21 @@
             attendanceRecords.push(record);
             saveData();
             
+            // Guardar en la nube
+            if (isCloudConnected) {
+                const cloudSuccess = await saveToCloud('saveRecord', {
+                    action: 'saveRecord',
+                    record: record
+                });
+                
+                if (cloudSuccess) {
+                    console.log('Registro guardado en la nube');
+                }
+            }
+            
             const icon = recordType === 'entrada' ? '🟢' : '🔴';
             showStatus(`${icon} ${recordType.toUpperCase()} registrada: ${student.name} - ${record.time}`, 'success');
             
-            // Mantener el foco en el campo del escáner para el siguiente escaneo
             setTimeout(() => {
                 document.getElementById('bluetoothScanner').focus();
             }, 1500);
@@ -506,8 +732,7 @@
             statusDiv.style.display = 'block';
         }
 
-        // Gestión de alumnos
-        function addStudent() {
+        async function addStudent() {
             const name = document.getElementById('studentName').value.trim();
             const code = document.getElementById('studentCode').value.trim();
             const grade = document.getElementById('studentGrade').value.trim();
@@ -525,6 +750,14 @@
             students.push({ name, code, grade });
             saveData();
             
+            // Guardar en la nube
+            if (isCloudConnected) {
+                await saveToCloud('saveStudents', {
+                    action: 'saveStudents',
+                    students: students
+                });
+            }
+            
             document.getElementById('studentName').value = '';
             document.getElementById('studentCode').value = '';
             document.getElementById('studentGrade').value = '';
@@ -533,7 +766,7 @@
             alert('Alumno agregado exitosamente');
         }
 
-        function generateSampleStudents() {
+        async function generateSampleStudents() {
             if (students.length > 0) {
                 if (!confirm('Esto eliminará los alumnos actuales. ¿Continuar?')) return;
             }
@@ -556,6 +789,15 @@
             }
             
             saveData();
+            
+            // Guardar en la nube
+            if (isCloudConnected) {
+                await saveToCloud('saveStudents', {
+                    action: 'saveStudents',
+                    students: students
+                });
+            }
+            
             displayStudents();
             alert('30 alumnos generados exitosamente');
         }
@@ -577,15 +819,23 @@
             `).join('');
         }
 
-        function deleteStudent(index) {
+        async function deleteStudent(index) {
             if (confirm('¿Eliminar este alumno?')) {
                 students.splice(index, 1);
                 saveData();
+                
+                // Actualizar en la nube
+                if (isCloudConnected) {
+                    await saveToCloud('saveStudents', {
+                        action: 'saveStudents',
+                        students: students
+                    });
+                }
+                
                 displayStudents();
             }
         }
 
-        // Gestión de registros
         function displayRecords() {
             const container = document.getElementById('recordsTable');
             const filterDate = document.getElementById('filterDate').value;
@@ -661,7 +911,6 @@
             link.click();
         }
 
-        // Reportes
         function generateWeeklyReport() {
             const weekInput = document.getElementById('weekSelect').value;
             
@@ -680,7 +929,6 @@
                 return recordDate >= weekStart && recordDate <= weekEnd;
             });
             
-            // Estadísticas generales
             const totalRegistros = weekRecords.length;
             const totalEntradas = weekRecords.filter(r => r.type === 'entrada').length;
             const totalSalidas = weekRecords.filter(r => r.type === 'salida').length;
@@ -705,7 +953,6 @@
                 </div>
             `;
             
-            // Reporte por alumno
             const studentStats = {};
             students.forEach(student => {
                 const studentRecords = weekRecords.filter(r => r.studentCode === student.code);
